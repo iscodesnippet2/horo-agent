@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils import base_url_host_matches, base_url_hostname
+from utils import base_url_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,6 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="openai_chat",
         auth_type="api_key",
         extra_env_vars=("OPENAI_API_KEY", "CUSTOM_API_KEY"),
-        base_url_env_var="OPENAI_BASE_URL",
-    ),
-    "openai-api": HermesOverlay(
-        transport="codex_responses",
-        auth_type="api_key",
-        base_url_override="https://api.openai.com/v1",
         base_url_env_var="OPENAI_BASE_URL",
     ),
     "lmstudio": HermesOverlay(
@@ -111,7 +105,6 @@ ALIASES: Dict[str, str] = {
 _LABEL_OVERRIDES: Dict[str, str] = {
     "custom": "Custom OpenAI-compatible",
     "lmstudio": "LM Studio",
-    "openai-api": "OpenAI API",
 }
 
 
@@ -119,9 +112,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
 
 TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "openai_chat": "chat_completions",
-    "anthropic_messages": "anthropic_messages",
-    "codex_responses": "codex_responses",
-    "bedrock_converse": "bedrock_converse",
 }
 
 
@@ -224,72 +214,23 @@ def is_aggregator(provider: str) -> bool:
     return pdef.is_aggregator if pdef else False
 
 
-# Flat-namespace resellers (e.g. opencode-go, opencode-zen) are flagged
-# ``is_aggregator=True`` because their live ``/v1/models`` returns bare model
-# IDs ("deepseek-v4-flash") rather than ``vendor/model`` routing slugs — the
-# model-switch resolver relies on that flag to search their flat catalog
-# (see model_switch.py step d). But they are NOT routing aggregators: every
-# model they list is a first-party model served under their own subscription,
-# not a passthrough route to another provider's endpoint. The picker dedup
-# (build_models_payload) must treat them differently from true routers like
-# OpenRouter — a reseller's first-party "minimax-m3" must never be stripped
-# just because a user's custom proxy also happens to serve a same-named model.
-_FLAT_NAMESPACE_RESELLERS: frozenset[str] = frozenset({
-    # Use normalized provider IDs: normalize_provider("opencode-zen") -> "opencode".
-    "opencode-go",
-    "opencode",
-})
-
-
 def is_routing_aggregator(provider: str) -> bool:
-    """Return True only for TRUE routing aggregators (e.g. OpenRouter, named
-    ``custom:*`` proxies) — those that route bare/vendor-slugged model names
-    to *other* providers' endpoints.
-
-    Distinct from :func:`is_aggregator`, which also reports True for
-    flat-namespace resellers (opencode-go/zen) whose catalog is entirely
-    first-party. Use this gate when the question is "would selecting this
-    model silently re-route the call away from the user's intended provider?"
-    — i.e. the picker dedup. Resellers answer no: their listed models are
-    their own, so their rows must not be deduped against user proxies.
-    """
-    provider_norm = normalize_provider(provider or "")
-    if provider_norm in _FLAT_NAMESPACE_RESELLERS:
-        return False
-    return is_aggregator(provider_norm)
+    """Routing aggregators are disabled in the lite build."""
+    return False
 
 
 def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     """Return the wire protocol a specific endpoint *requires*, or None.
 
-    Some hosts only accept one API mode and reject the others outright:
-      - api.openai.com only accepts the Responses API for its (reasoning)
-        models when tools + reasoning are in play (chat/completions 400s).
-      - api.anthropic.com / ``…/anthropic`` suffixes speak native Messages.
-      - Kimi's ``/coding`` endpoint speaks native Messages.
-      - AWS Bedrock runtime hosts speak Converse.
-
-    These are *mandatory* — a session carrying a stale api_mode (e.g. a
-    /model switch that kept the previous provider's ``chat_completions``)
-    must be overridden to the host's required mode, not merely filled in
-    when empty. Generic / unknown endpoints return None so an explicitly
-    configured api_mode on them is never clobbered.
+    Lite builds only support OpenAI-compatible chat completions. Generic /
+    unknown internal endpoints return None so an explicitly configured
+    chat-completions endpoint is not clobbered.
     """
     if not base_url:
         return None
-    url_lower = base_url.rstrip("/").lower()
     hostname = base_url_hostname(base_url)
-    # Exact-hostname matching only — never bare substring — so lookalike hosts
-    # (api.openai.com.attacker.test) and path-segment spoofs
-    # (proxy.test/api.openai.com/v1) are NOT treated as the real endpoint. (#32243)
-    if hostname == "api.kimi.com" and "/coding" in url_lower:
-        return "anthropic_messages"
-    if hostname == "api.anthropic.com" or url_lower.endswith("/anthropic"):
-        return "anthropic_messages"
-    if hostname == "api.openai.com":
-        return "codex_responses"
-    if hostname.startswith("bedrock-runtime.") and base_url_host_matches(base_url, "amazonaws.com"):
-        return "bedrock_converse"
+    if hostname in {"api.openai.com", "api.anthropic.com"}:
+        return None
     return None
 
 
@@ -299,8 +240,7 @@ def determine_api_mode(provider: str, base_url: str = "") -> str:
     Resolution order:
       1. Host-mandated mode (special endpoints that only accept one protocol).
       2. Known provider → transport → TRANSPORT_TO_API_MODE.
-      3. Direct provider checks (bedrock).
-      4. Default: 'chat_completions'.
+      3. Default: 'chat_completions'.
     """
     mandated = host_mandated_api_mode(base_url)
     if mandated is not None:
@@ -309,10 +249,6 @@ def determine_api_mode(provider: str, base_url: str = "") -> str:
     pdef = get_provider(provider)
     if pdef is not None:
         return TRANSPORT_TO_API_MODE.get(pdef.transport, "chat_completions")
-
-    # Direct provider checks for providers not in HERMES_OVERLAYS
-    if provider == "bedrock":
-        return "bedrock_converse"
 
     return "chat_completions"
 

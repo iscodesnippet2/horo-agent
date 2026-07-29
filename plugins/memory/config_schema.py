@@ -37,6 +37,7 @@ KIND_JSON = "json"
 
 # Storage backends understood by web_server (see its read/write dispatch).
 STORAGE_FLAT_JSON = "flat_json"
+# Compatibility only: external Honcho memory provider is removed in lite.
 STORAGE_HONCHO_HOST_BLOCK = "honcho_host_block"
 
 

@@ -13,10 +13,10 @@ Architecture (two transports):
   3. Parent spawns a child process that runs the LLM's script
   4. Tool calls travel over the UDS back to the parent for dispatch
 
-  **Remote backends (file-based RPC):**
+  **SSH backend (file-based RPC):**
   1. Parent generates `hermes_tools.py` with file-based RPC stubs
   2. Parent ships both files to the remote environment
-  3. Script runs inside the terminal backend (Docker/SSH/Modal/Daytona/etc.)
+  3. Script runs inside the SSH terminal backend
   4. Tool calls are written as request files; a polling thread on the parent
      reads them via env.execute(), dispatches, and writes response files
   5. The script polls for response files and continues
@@ -25,7 +25,7 @@ In both cases, only the script's stdout is returned to the LLM; intermediate
 tool results never enter the context window.
 
 Platform: Linux / macOS only (Unix domain sockets for local). Disabled on Windows.
-Remote execution additionally requires Python 3 in the terminal backend.
+SSH execution additionally requires Python 3 in the terminal backend.
 """
 
 import base64
@@ -57,11 +57,9 @@ logger = logging.getLogger(__name__)
 
 SANDBOX_AVAILABLE = True
 
-# The 7 tools allowed inside the sandbox. The intersection of this list
+# The tools allowed inside the sandbox. The intersection of this list
 # and the session's enabled tools determines which stubs are generated.
 SANDBOX_ALLOWED_TOOLS = frozenset([
-    "web_search",
-    "web_extract",
     "read_file",
     "write_file",
     "search_files",
@@ -298,18 +296,6 @@ def check_sandbox_requirements() -> bool:
 # Per-tool stub templates: (function_name, signature, docstring, args_dict_expr)
 # The args_dict_expr builds the JSON payload sent over the RPC socket.
 _TOOL_STUBS = {
-    "web_search": (
-        "web_search",
-        "query: str, limit: int = 5",
-        '"""Search the web. Returns dict with data.web list of {url, title, description}."""',
-        '{"query": query, "limit": limit}',
-    ),
-    "web_extract": (
-        "web_extract",
-        "urls: list, char_limit: int = None",
-        '"""Extract content from URLs (no LLM summarization). Returns dict with results list of {url, title, content, error}. Pages over char_limit (default 15000) are head+tail truncated with the full text stored on disk; the content footer gives the path. content is markdown."""',
-        '{"urls": urls, "char_limit": char_limit}',
-    ),
     "read_file": (
         "read_file",
         "path: str, offset: int = 1, limit: int = 500",
@@ -388,8 +374,8 @@ _COMMON_HELPERS = '''\
 
 def json_parse(text: str):
     """Parse JSON tolerant of control characters (strict=False).
-    Use this instead of json.loads() when parsing output from terminal()
-    or web_extract() that may contain raw tabs/newlines in strings."""
+    Use this instead of json.loads() when parsing terminal output that may
+    contain raw tabs/newlines in strings."""
     return json.loads(text, strict=False)
 
 
@@ -707,7 +693,7 @@ def _rpc_server_loop(
 def _get_or_create_env(task_id: str):
     """Get or create the terminal environment for *task_id*.
 
-    Reuses the same environment (container/sandbox/SSH session) that the
+    Reuses the same environment (local process/SSH session) that the
     terminal and file tools use, creating one if it doesn't exist yet.
     Returns ``(env, env_type)`` tuple.
     """
@@ -742,30 +728,11 @@ def _get_or_create_env(task_id: str):
         env_type = config["env_type"]
         overrides = _task_env_overrides.get(effective_task_id, {})
 
-        if env_type == "docker":
-            image = overrides.get("docker_image") or config["docker_image"]
-        elif env_type == "singularity":
-            image = overrides.get("singularity_image") or config["singularity_image"]
-        elif env_type == "modal":
-            image = overrides.get("modal_image") or config["modal_image"]
-        elif env_type == "daytona":
-            image = overrides.get("daytona_image") or config["daytona_image"]
-        else:
-            image = ""
+        image = ""
 
         cwd = overrides.get("cwd") or config["cwd"]
 
         container_config = None
-        if env_type in {"docker", "singularity", "modal", "daytona"}:
-            container_config = {
-                "container_cpu": config.get("container_cpu", 1),
-                "container_memory": config.get("container_memory", 5120),
-                "container_disk": config.get("container_disk", 51200),
-                "container_persistent": config.get("container_persistent", True),
-                "docker_volumes": config.get("docker_volumes", []),
-                "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-                "docker_network": config.get("docker_network", True),
-            }
 
         ssh_config = None
         if env_type == "ssh":
@@ -1215,8 +1182,8 @@ def execute_code(
     if not code or not code.strip():
         return tool_error("No code provided.")
 
-    # Dispatch: remote backends use file-based RPC, local uses UDS
-    from tools.terminal_tool import _get_env_config, _docker_has_host_access
+    # Dispatch: SSH uses file-based RPC, local uses UDS.
+    from tools.terminal_tool import _get_env_config
     _env_config = _get_env_config()
     env_type = _env_config["env_type"]
 
@@ -1224,12 +1191,11 @@ def execute_code(
     # passes through terminal()/DANGEROUS_PATTERNS, so guard the whole script
     # here before either dispatch path spawns it. Runs synchronously in the
     # caller (tool-executor) thread, which holds the session context (#30882).
-    # A Docker sandbox with host bind mounts is no longer isolated, so its
-    # script does not get the container fast-path.
+    # Enterprise-lite has no container fast-path; host access is always false.
     from tools.approval import check_execute_code_guard
     _guard = check_execute_code_guard(
         code, env_type,
-        has_host_access=_docker_has_host_access(_env_config),
+        has_host_access=False,
     )
     if not _guard.get("approved", False):
         return json.dumps({
@@ -1870,13 +1836,6 @@ def _resolve_child_cwd(mode: str, staging_dir: str, task_id: str = "") -> str:
 # Per-tool documentation lines for the execute_code description.
 # Ordered to match the canonical display order.
 _TOOL_DOC_LINES = [
-    ("web_search",
-     "  web_search(query: str, limit: int = 5) -> dict\n"
-     "    Returns {\"data\": {\"web\": [{\"url\", \"title\", \"description\"}, ...]}}"),
-    ("web_extract",
-     "  web_extract(urls: list[str], char_limit: int = None) -> dict\n"
-     "    Returns {\"results\": [{\"url\", \"title\", \"content\", \"error\"}, ...]} where content is markdown.\n"
-     "    No LLM summarization. Pages over char_limit (default 15000) are head+tail truncated; full text stored on disk (path in the content footer)."),
     ("read_file",
      "  read_file(path: str, offset: int = 1, limit: int = 500) -> dict\n"
      "    Lines are 1-indexed. Returns {\"content\": \"...\", \"total_lines\": N}"),
@@ -1899,9 +1858,7 @@ def build_execute_code_schema(enabled_sandbox_tools: set = None,
                               mode: str = None) -> dict:
     """Build the execute_code schema with description listing only enabled tools.
 
-    When tools are disabled via ``hermes tools`` (e.g. web is turned off),
-    the schema description should NOT mention web_search / web_extract —
-    otherwise the model thinks they are available and keeps trying to use them.
+    The schema description lists only tools enabled for execute_code RPC.
 
     ``mode`` controls the working-directory sentence in the description:
       - ``'strict'``: scripts run in a temp dir (not the session's CWD)
@@ -1919,8 +1876,8 @@ def build_execute_code_schema(enabled_sandbox_tools: set = None,
         doc for name, doc in _TOOL_DOC_LINES if name in enabled_sandbox_tools
     )
 
-    # Build example import list from enabled tools
-    import_examples = [n for n in ("web_search", "terminal") if n in enabled_sandbox_tools]
+    # Build example import list from enabled tools.
+    import_examples = [n for n in ("terminal",) if n in enabled_sandbox_tools]
     if not import_examples:
         import_examples = sorted(enabled_sandbox_tools)[:2]
     if import_examples:

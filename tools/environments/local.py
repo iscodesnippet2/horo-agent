@@ -273,8 +273,6 @@ def _build_provider_env_blocklist() -> frozenset:
         "XAI_API_KEY",
         "HELICONE_API_KEY",
         "PARALLEL_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "FIRECRAWL_API_URL",
         "TELEGRAM_HOME_CHANNEL",
         "TELEGRAM_HOME_CHANNEL_NAME",
         "DISCORD_HOME_CHANNEL",
@@ -295,8 +293,6 @@ def _build_provider_env_blocklist() -> frozenset:
         "SIGNAL_HOME_CHANNEL",
         "SIGNAL_HOME_CHANNEL_NAME",
         "SIGNAL_IGNORE_STORIES",
-        "HASS_TOKEN",
-        "HASS_URL",
         "EMAIL_ADDRESS",
         "EMAIL_PASSWORD",
         "EMAIL_IMAP_HOST",
@@ -353,7 +349,7 @@ def _is_hermes_internal_secret(key: str) -> bool:
 
     - ``AUXILIARY_<TASK>_API_KEY`` / ``AUXILIARY_<TASK>_BASE_URL`` — per-task
       side-LLM credentials bridged from ``config.yaml[auxiliary]`` by
-      ``gateway/run.py`` and ``cli.py`` (vision, web_extract, approval,
+      ``gateway/run.py`` and ``cli.py`` (vision, approval,
       compression, and any plugin-registered auxiliary task). These are
       separate, often higher-spend API keys plus base URLs that may point at
       private endpoints; a model-authored shell command must never see them.
@@ -543,7 +539,6 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "GATEWAY_RELAY_ID",
     "GATEWAY_RELAY_SECRET",
     "GATEWAY_RELAY_DELIVERY_KEY",
-    "HASS_TOKEN",
     "EMAIL_PASSWORD",
     "HERMES_DASHBOARD_SESSION_TOKEN",
     # Remote-compute / infrastructure secrets
@@ -580,10 +575,9 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     flag is grep-able for audit: ``grep -rn 'inherit_credentials=True'`` lists
     every spawn site that still receives provider credentials.
 
-    Callers that need a *specific* non-provider secret (e.g. the browser worker
-    needs ``BROWSERBASE_API_KEY`` / ``FIRECRAWL_API_KEY``) should call with
-    ``inherit_credentials=False`` and copy just those keys back from
-    ``os.environ`` into the returned dict.
+    Callers that need a specific non-provider secret should call with
+    ``inherit_credentials=False`` and copy just that key back from ``os.environ``
+    into the returned dict.
     """
     env = os.environ.copy()
 

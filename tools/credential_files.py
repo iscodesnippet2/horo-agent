@@ -450,23 +450,11 @@ def from_agent_visible_cache_path(
     container_path: str,
     container_base: str = "/root/.hermes",
 ) -> str:
-    """Translate a sandbox/container cache path back to its host path.
+    """Translate an agent-visible cache path back to its host path.
 
-    Inverse of :func:`to_agent_visible_cache_path`. Returns the input unchanged
-    when the active backend is not Docker, or when the path is not under any
-    auto-mounted cache directory — the caller then treats a still-container
-    path as "no host file" and falls back to an in-container read.
+    Enterprise-lite does not ship container terminal backends, so no path
+    mapping is required.
     """
-    if os.environ.get("TERMINAL_ENV", "local") != "docker":
-        return container_path
-
-    path = Path(container_path)
-    for mount in get_cache_directory_mounts(container_base=container_base):
-        try:
-            rel = path.relative_to(mount["container_path"])
-        except ValueError:
-            continue
-        return str(Path(mount["host_path"]) / rel)
     return container_path
 
 
@@ -474,21 +462,12 @@ def to_agent_visible_cache_path(
     host_path: str,
     container_base: str = "/root/.hermes",
 ) -> str:
-    """Translate a host cache path to its mounted path inside the sandbox.
+    """Translate a host cache path to its agent-visible path.
 
-    Returns the input unchanged if it is not under any auto-mounted cache
-    directory, or if the active terminal backend does not require path
-    translation (only Docker for now).
+    Enterprise-lite does not ship container terminal backends, so no path
+    mapping is required.
     """
-    # Only Docker backend requires translation at this time.  Other backends
-    # (Modal, Daytona) use different mount semantics and will be
-    # addressed separately if needed.  Backend is identified by TERMINAL_ENV
-    # (same env var tools/terminal_tool.py reads in _get_environment_config).
-    if os.environ.get("TERMINAL_ENV", "local") != "docker":
-        return host_path
-
-    mapped = map_cache_path_to_container(host_path, container_base=container_base)
-    return mapped if mapped is not None else host_path
+    return host_path
 
 
 def iter_cache_files(
@@ -496,8 +475,9 @@ def iter_cache_files(
 ) -> List[Dict[str, str]]:
     """Return individual (host_path, container_path) entries for cache files.
 
-    Used by Modal to upload files individually and resync before each command.
-    Skips symlinks.  The container paths use the new ``cache/<subdir>`` layout.
+    Used by remote sync helpers to upload files individually and resync before
+    each command. Skips symlinks. The target paths use the new
+    ``cache/<subdir>`` layout.
     """
     from hermes_constants import get_hermes_dir
 
@@ -521,5 +501,4 @@ def iter_cache_files(
 def clear_credential_files() -> None:
     """Reset the skill-scoped registry (e.g. on session reset)."""
     _get_registered().clear()
-
 

@@ -87,16 +87,41 @@ from plugins.memory.config_schema import (
     STORAGE_HONCHO_HOST_BLOCK,
     get_provider_config_schema,
 )
-from gateway.status import (
-    derive_gateway_busy,
-    derive_gateway_drainable,
-    get_running_pid_cached,
-    get_running_pid,
-    get_runtime_status_running_pid,
-    normalize_updated_at,
-    parse_active_agents,
-    read_runtime_status,
-)
+try:
+    from gateway.status import (
+        derive_gateway_busy,
+        derive_gateway_drainable,
+        get_running_pid_cached,
+        get_running_pid,
+        get_runtime_status_running_pid,
+        normalize_updated_at,
+        parse_active_agents,
+        read_runtime_status,
+    )
+except ModuleNotFoundError:
+    def derive_gateway_busy(*args, **kwargs):
+        return False
+
+    def derive_gateway_drainable(*args, **kwargs):
+        return False
+
+    def get_running_pid_cached(*args, **kwargs):
+        return None
+
+    def get_running_pid(*args, **kwargs):
+        return None
+
+    def get_runtime_status_running_pid(*args, **kwargs):
+        return None
+
+    def normalize_updated_at(value=None):
+        return value
+
+    def parse_active_agents(*args, **kwargs):
+        return []
+
+    def read_runtime_status(*args, **kwargs):
+        return {}
 from utils import env_var_enabled
 
 try:
@@ -817,31 +842,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "terminal.backend": {
         "type": "select",
         "description": "Terminal execution backend",
-        "options": ["local", "docker", "ssh", "modal", "daytona", "singularity"],
-    },
-    "terminal.modal_mode": {
-        "type": "select",
-        "description": "Modal sandbox mode",
-        "options": ["sandbox", "function"],
-    },
-    "proxy.enabled": {
-        "type": "boolean",
-        "description": (
-            "Docker-only egress credential firewall. Requires `horo egress setup` "
-            "and `horo egress start`; Modal/SSH/Daytona are not wired yet."
-        ),
-        "category": "security",
-    },
-    "proxy.credential_source": {
-        "type": "select",
-        "description": "Where iron-proxy loads real upstream secrets at start time",
-        "options": ["env", "bitwarden"],
-        "category": "security",
-    },
-    "proxy.enforce_on_docker": {
-        "type": "boolean",
-        "description": "Refuse Docker sandboxes when egress is enabled but not configured/running",
-        "category": "security",
+        "options": ["local", "ssh"],
     },
     "tts.provider": {
         "type": "select",
@@ -3647,49 +3648,17 @@ def _safe_call(mod, fn_name: str, default):
         return default
 
 
-# ---------------------------------------------------------------------------
-# Portal endpoint — Nous Portal auth + Tool Gateway routing status (read-only).
-# ---------------------------------------------------------------------------
-
-
 @app.get("/api/portal")
 async def get_portal_status():
-    cfg = load_config() or {}
-    auth: Dict[str, Any] = {}
-    try:
-        from hermes_cli.auth import get_nous_auth_status
-
-        auth = get_nous_auth_status() or {}
-    except Exception:
-        auth = {}
-
-    features = []
-    try:
-        from hermes_cli.nous_subscription import get_nous_subscription_features
-
-        feats = get_nous_subscription_features(cfg)
-        if feats is not None:
-            for feat in feats.items():
-                if getattr(feat, "managed_by_nous", False):
-                    state = "via Nous Portal"
-                elif getattr(feat, "active", False) and getattr(feat, "current_provider", None):
-                    state = feat.current_provider
-                elif getattr(feat, "active", False):
-                    state = "active"
-                else:
-                    state = "not configured"
-                features.append({"label": getattr(feat, "label", ""), "state": state})
-    except Exception:
-        _log.exception("portal features failed")
-
-    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
     return {
-        "logged_in": bool(auth.get("logged_in")),
-        "portal_url": auth.get("portal_base_url"),
-        "inference_url": auth.get("inference_base_url"),
-        "provider": str((model_cfg or {}).get("provider") or ""),
-        "subscription_url": "https://portal.nousresearch.com/manage-subscription",
-        "features": features,
+        "logged_in": False,
+        "portal_url": "",
+        "inference_url": "",
+        "provider": "",
+        "subscription_url": "",
+        "features": [],
+        "disabled": True,
+        "message": "Nous Portal is disabled in the lite build.",
     }
 
 
@@ -4068,16 +4037,11 @@ async def restart_gateway(profile: Optional[str] = None):
 
 @app.post("/api/gateway/drain")
 async def gateway_drain(request: Request):
-    """Begin or cancel an external (NAS-driven) gateway drain.
+    """Begin or cancel a local gateway drain.
 
-    Authenticated by the non-interactive token-auth seam: the
-    ``dashboard_auth/drain`` plugin registers this exact path as a token route
-    and verifies the ``Authorization`` bearer secret. If that plugin isn't
-    active (no ``HERMES_DASHBOARD_DRAIN_SECRET``), the route is NOT a token
-    route, so on a gated bind the cookie gate handles it (a browser session can
-    still drive it from the dashboard) and on a loopback bind the legacy
-    session-token gate applies — either way it is never unauthenticated on a
-    network-exposed bind.
+    Enterprise-lite does not include the managed Nous/NAS drain-token auth
+    plugin. On a gated bind the cookie gate handles this route; on loopback,
+    the legacy session-token gate applies.
 
     Body: ``{"action": "drain"}`` (begin) or ``{"action": "cancel"}`` (cancel).
     Begin writes the ``.drain_request.json`` marker the gateway's
@@ -6675,7 +6639,6 @@ def get_model_info(profile: Optional[str] = None):
 # in hermes_cli/config.py — listed here for deterministic ordering in the UI.
 _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "vision",
-    "web_extract",
     "compression",
     "skills_hub",
     "approval",
@@ -7048,14 +7011,7 @@ def _apply_model_assignment_sync(
         cfg["model"] = model_cfg
 
         # When switching the main provider to Nous, mirror the CLI's
-        # post-model-selection behaviour (hermes_cli/main.py
-        # prompt_enable_tool_gateway / tools_config apply_nous_managed_defaults):
-        # auto-route any *unconfigured* tools through the Nous Tool Gateway.
-        # This is purely additive — apply_nous_managed_defaults skips every
-        # tool where the user already has a direct key (FIRECRAWL_API_KEY,
-        # FAL_KEY, etc.) or an explicit backend/provider in config, so it
-        # never overwrites a user's own setup. GUI users thus land on the
-        # gateway the same way CLI users do, without a separate prompt.
+        # post-model-selection behaviour for managed local defaults.
         gateway_tools: list[str] = []
         if provider.strip().lower() == "nous":
             try:
@@ -8103,13 +8059,6 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
         ),
         "required_env": (),
     },
-    "homeassistant": {
-        "name": "Home Assistant",
-        "description": "Control your smart home from Hermes via Home Assistant.",
-        "docs_url": "https://www.home-assistant.io/docs/authentication/",
-        "env_vars": ("HASS_URL", "HASS_TOKEN"),
-        "required_env": ("HASS_URL", "HASS_TOKEN"),
-    },
     "email": {
         "name": "Email",
         "description": "Talk to Hermes through an IMAP/SMTP mailbox.",
@@ -8252,7 +8201,6 @@ _PLATFORM_ORDER: tuple[str, ...] = (
     "whatsapp",
     "signal",
     "bluebubbles",
-    "homeassistant",
     "email",
     "sms",
     "dingtalk",
@@ -8302,15 +8250,6 @@ _MESSAGING_ENV_FALLBACKS: dict[str, dict[str, Any]] = {
     "WHATSAPP_ALLOWED_USERS": {
         "description": "Comma-separated WhatsApp users allowed to use the bot",
         "prompt": "Allowed WhatsApp users",
-    },
-    "HASS_URL": {
-        "description": "Home Assistant base URL, e.g. https://homeassistant.local:8123",
-        "prompt": "Home Assistant URL",
-    },
-    "HASS_TOKEN": {
-        "description": "Long-lived access token from Home Assistant (Profile → Security)",
-        "prompt": "Home Assistant access token",
-        "password": True,
     },
     "EMAIL_ADDRESS": {
         "description": "Email address to send and receive from",
@@ -8473,8 +8412,6 @@ def _channel_managed_env_keys() -> frozenset[str]:
 # (``DISCORD_*``, ``MATRIX_*``, …) are owned by the Messaging UI instead.
 _MESSAGING_KEYS_PAGE_KEYS = frozenset({
     "GATEWAY_ALLOW_ALL_USERS",
-    "GATEWAY_PROXY_KEY",
-    "GATEWAY_PROXY_URL",
 })
 
 
@@ -8482,7 +8419,6 @@ def _platform_env_prefixes(platform_id: str) -> tuple[str, ...]:
     """Env-var prefixes owned by a messaging platform card."""
     aliases: dict[str, tuple[str, ...]] = {
         "email": ("EMAIL_",),
-        "homeassistant": ("HASS_",),
         "qqbot": ("QQ_", "QQBOT_"),
         "sms": ("TWILIO_",),
         "wecom": ("WECOM_BOT_", "WECOM_SECRET"),
@@ -9956,83 +9892,7 @@ def _copilot_acp_status() -> Dict[str, Any]:
 # ``pkce`` = open URL + paste callback code, ``device_code`` = show code +
 # verification URL + poll, ``external`` = read-only (delegated to a third-party
 # CLI like Claude Code or Qwen).
-_OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
-    {
-        "id": "nous",
-        "name": "Nous Portal",
-        "flow": "device_code",
-        "cli_command": "horo auth add nous",
-        "docs_url": "https://portal.nousresearch.com",
-        "status_fn": None,  # dispatched via auth.get_nous_auth_status
-    },
-    {
-        "id": "openai-codex",
-        "name": "OpenAI OAuth (ChatGPT)",
-        "flow": "device_code",
-        "cli_command": "horo auth add openai-codex",
-        "docs_url": "https://platform.openai.com/docs",
-        "status_fn": None,  # dispatched via auth.get_codex_auth_status
-    },
-    {
-        "id": "qwen-oauth",
-        "name": "Qwen (via Qwen CLI)",
-        "flow": "external",
-        "cli_command": "horo auth add qwen-oauth",
-        "docs_url": "https://github.com/QwenLM/qwen-code",
-        "status_fn": None,  # dispatched via auth.get_qwen_auth_status
-    },
-    {
-        "id": "minimax-oauth",
-        "name": "MiniMax (OAuth)",
-        # MiniMax's flow is structurally device-code (verification URI +
-        # user code, backend polls the token endpoint) with a PKCE
-        # extension for code-binding. The dashboard renders the same UX
-        # as Nous's device-code flow; the PKCE bit is a security
-        # extension that doesn't change the operator experience.
-        "flow": "device_code",
-        "cli_command": "horo auth add minimax-oauth",
-        "docs_url": "https://www.minimax.io",
-        "status_fn": None,  # dispatched via auth.get_minimax_oauth_auth_status
-    },
-    {
-        "id": "xai-oauth",
-        "name": "xAI Grok OAuth (SuperGrok / Premium+)",
-        # Device code is the default because it works in remote shells,
-        # containers, and desktop installs without requiring a reachable
-        # 127.0.0.1 callback.
-        "flow": "device_code",
-        "cli_command": "horo auth add xai-oauth",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth",
-        "status_fn": None,  # dispatched via auth.get_xai_oauth_auth_status
-    },
-    {
-        "id": "copilot-acp",
-        "name": "GitHub Copilot (ACP)",
-        "flow": "external",
-        "cli_command": "copilot /login",
-        "docs_url": "https://docs.github.com/en/copilot",
-        "status_fn": _copilot_acp_status,
-    },
-    # ── Anthropic / Claude entries sit at the bottom: the API-key path
-    # first, then the subscription OAuth path (which only works with extra
-    # usage credits on top of a Claude Max plan — see disclaimer in name).
-    {
-        "id": "anthropic",
-        "name": "Anthropic API Key",
-        "flow": "pkce",
-        "cli_command": "horo auth add anthropic",
-        "docs_url": "https://docs.claude.com/en/api/getting-started",
-        "status_fn": _anthropic_oauth_status,
-    },
-    {
-        "id": "claude-code",
-        "name": "Anthropic OAuth: Required Extra Usage Credits to Use Subscription",
-        "flow": "external",
-        "cli_command": "claude setup-token",
-        "docs_url": "https://docs.claude.com/en/docs/claude-code",
-        "status_fn": _claude_code_only_status,
-    },
-)
+_OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = ()
 
 
 def _resolve_provider_status(provider_id: str, status_fn) -> Dict[str, Any]:
@@ -10168,53 +10028,8 @@ def _oauth_provider_disconnect_hint(provider: Dict[str, Any], status: Dict[str, 
 
 
 def _build_oauth_catalog() -> list[Dict[str, Any]]:
-    """Build the Accounts-tab provider list.
-
-    MEMBERSHIP is the union of:
-      1. ``_OAUTH_PROVIDER_CATALOG`` — the explicit, hand-tuned cards that carry
-         bespoke flow / status_fn / cli_command (including the api-key Anthropic
-         PKCE card and the synthetic claude-code subscription row, which are not
-         catalog providers), and
-      2. every accounts-tab provider in the unified ``provider_catalog()`` (the
-         ``horo model`` universe) — so any OAuth/external provider added as a
-         plugin appears automatically, with sensible defaults, even if no
-         explicit card was written for it.
-
-    The explicit catalog wins on metadata; the unified catalog guarantees we
-    never silently drop a provider the CLI picker offers. Order: explicit cards
-    first (their curated order), then any catalog-only providers appended in
-    ``horo model`` order.
-    """
-    rows: list[Dict[str, Any]] = []
-    seen: set[str] = set()
-
-    # 1. Explicit hand-tuned cards (authoritative metadata + curated order).
-    for entry in _OAUTH_PROVIDER_CATALOG:
-        if entry["id"] in seen:
-            continue
-        seen.add(entry["id"])
-        rows.append(dict(entry))
-
-    # 2. Catalog accounts-providers not already covered — keeps the Accounts tab
-    #    in lockstep with the `horo model` universe (zero-edit for new plugins).
-    try:
-        from hermes_cli.provider_catalog import provider_catalog
-        for d in provider_catalog():
-            if d.tab != "accounts" or d.slug in seen:
-                continue
-            seen.add(d.slug)
-            rows.append({
-                "id": d.slug,
-                "name": d.label,
-                "flow": "external",
-                "cli_command": f"horo auth add {d.slug}",
-                "docs_url": d.signup_url or "",
-                "status_fn": None,
-            })
-    except Exception:
-        pass
-
-    return rows
+    """Build the Accounts-tab provider list for the lite build."""
+    return []
 
 
 @app.get("/api/providers/oauth")
@@ -10237,9 +10052,7 @@ async def list_oauth_providers(profile: Optional[str] = None):
           expires_at       ISO timestamp string or null
           has_refresh_token bool
 
-    Membership is derived from the unified provider_catalog() so this stays in
-    sync with the `horo model` picker; _OAUTH_OVERRIDES supplies per-provider
-    flow/status/cli metadata.
+    Enterprise-lite disables managed OAuth/account providers.
     """
     with _profile_scope(profile):
         providers = []
@@ -15752,7 +15565,6 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
         _is_provider_active,
         _visible_providers,
         provider_readiness_status,
-        web_provider_capabilities,
     )
     from hermes_cli.config import get_env_value
     from hermes_cli.nous_subscription import get_nous_subscription_features
@@ -15807,13 +15619,6 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                         prov, config, features=features, is_active=is_active
                     ),
                 }
-                if name == "web" and prov.get("web_backend"):
-                    # The runtime split web into two capabilities long ago
-                    # (web.search_backend / web.extract_backend); surface each
-                    # row's backend key and which capabilities it can serve so
-                    # the GUI can offer per-capability selection.
-                    row["web_backend"] = prov["web_backend"]
-                    row["capabilities"] = web_provider_capabilities(prov["web_backend"])
                 if name == "tts" and prov.get("tts_provider"):
                     # The provider key written to tts.provider on selection.
                     # Doubles as the config section holding the provider's
@@ -15821,19 +15626,6 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                     # those fields inline in the Capabilities panel.
                     row["tts_provider"] = prov["tts_provider"]
                 providers.append(row)
-        if name == "web":
-            # Resolve the per-capability active backends exactly the way the
-            # web_search / web_extract dispatchers do (per-capability key →
-            # shared web.backend → credential auto-detect), so the GUI badges
-            # reflect what a tool call would actually hit right now.
-            try:
-                from tools.web_tools import _get_extract_backend, _get_search_backend
-
-                active_search_backend = _get_search_backend()
-                active_extract_backend = _get_extract_backend()
-            except Exception:
-                active_search_backend = None
-                active_extract_backend = None
     payload = {
         "name": name,
         "has_category": cat is not None,
@@ -16045,26 +15837,11 @@ async def select_toolset_provider(
     extract backend). Omitting ``capability`` keeps the legacy whole-provider
     behavior (writes ``web.backend``).
 
-    Managed Nous rows (``managed_nous_feature``) additionally report the
-    Portal entitlement state: the CLI flow gates these selections on
-    ``ensure_nous_portal_access`` (inline login), but the GUI has no inline
-    prompt, so selecting one while logged out / unentitled used to write the
-    config keys and then never activate (``_is_provider_active`` requires
-    ``managed_by_nous``). The response now carries an additive
-    ``needs_nous_auth: true`` + ``feature`` so the client can drive the
-    existing Nous Portal OAuth flow (``POST /api/providers/oauth/nous/start``)
-    and refetch.
+    Enterprise-lite has no managed Nous rows or portal entitlement checks.
     """
     from hermes_cli.tools_config import (
-        TOOL_CATEGORIES,
         apply_provider_selection,
-        web_provider_capabilities,
         _get_effective_configurable_toolsets,
-        _visible_providers,
-    )
-    from hermes_cli.nous_subscription import (
-        MANAGED_FEATURE_COVERAGE_CATEGORY,
-        get_nous_subscription_features,
     )
 
     valid = {ts_key for ts_key, _, _ in _get_effective_configurable_toolsets()}
@@ -16072,88 +15849,22 @@ async def select_toolset_provider(
         raise HTTPException(status_code=400, detail=f"Unknown toolset: {name}")
 
     if body.capability is not None:
-        if name != "web":
-            raise HTTPException(
-                status_code=400,
-                detail="capability selection is only supported for the web toolset",
-            )
-        if body.capability not in ("search", "extract"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown capability: {body.capability!r} (expected 'search' or 'extract')",
-            )
+        raise HTTPException(
+            status_code=400,
+            detail="capability selection is not available in the lite build",
+        )
 
     with _profile_scope(body.profile or profile):
         config = load_config()
-        if body.capability is not None:
-            # Per-capability path: resolve the picker row to its backend key
-            # and write web.<capability>_backend. Does NOT touch web.backend,
-            # so the other capability keeps resolving through the shared
-            # fallback chain.
-            cat = TOOL_CATEGORIES.get(name)
-            providers = _visible_providers(cat, config, force_fresh=True) if cat else []
-            prov = next((p for p in providers if p.get("name") == body.provider), None)
-            if prov is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown provider {body.provider!r} for toolset {name!r}",
-                )
-            backend = prov.get("web_backend")
-            if not backend:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Provider {body.provider!r} has no web backend key",
-                )
-            if body.capability not in web_provider_capabilities(backend):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{body.provider} does not support {body.capability}",
-                )
-            web_cfg = config.setdefault("web", {})
-            if not isinstance(web_cfg, dict):
-                web_cfg = {}
-                config["web"] = web_cfg
-            web_cfg[f"{body.capability}_backend"] = backend
-        else:
-            try:
-                apply_provider_selection(name, body.provider, config)
-            except KeyError as exc:
-                raise HTTPException(status_code=400, detail=str(exc).strip('"'))
+        try:
+            apply_provider_selection(name, body.provider, config)
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc).strip('"'))
         save_config(config)
         response: Dict[str, Any] = {"ok": True, "name": name, "provider": body.provider}
         if body.capability is not None:
             response["capability"] = body.capability
 
-        # Entitlement check for managed Nous rows — mirrors the gate the CLI
-        # applies via ensure_nous_portal_access at selection time.
-        cat = TOOL_CATEGORIES.get(name)
-        row = None
-        if cat:
-            row = next(
-                (
-                    p
-                    for p in _visible_providers(cat, config, force_fresh=True)
-                    if p.get("name") == body.provider
-                ),
-                None,
-            )
-        managed_feature = (row or {}).get("managed_nous_feature")
-        if managed_feature:
-            features = get_nous_subscription_features(config, force_fresh=True)
-            acct = features.account_info
-            category = MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature)
-            entitled = bool(
-                acct
-                and acct.logged_in
-                and (
-                    acct.tool_gateway_entitled_for(category)
-                    if category
-                    else acct.tool_gateway_entitled
-                )
-            )
-            if not entitled:
-                response["needs_nous_auth"] = True
-                response["feature"] = managed_feature
     return response
 
 
@@ -16281,34 +15992,14 @@ async def run_toolset_post_setup(
 # failure renders as a status, not a 500.
 # ---------------------------------------------------------------------------
 
-# Table-driven backend metadata — kept in sync with the dispatch ladder in
-# tools/terminal_tool.py::_create_environment and the terminal.backend enum
-# surfaced in the desktop raw-config settings.
+# Table-driven backend metadata — kept in sync with the enterprise-lite
+# dispatch ladder in tools/terminal_tool.py::_create_environment and the
+# terminal.backend enum surfaced in the desktop raw-config settings.
 _TERMINAL_BACKENDS: List[Dict[str, str]] = [
     {
         "name": "local",
         "label": "Local",
         "description": "Run commands directly on this machine. No isolation.",
-    },
-    {
-        "name": "docker",
-        "label": "Docker",
-        "description": "Run commands in an isolated Docker container with a persistent workspace.",
-    },
-    {
-        "name": "singularity",
-        "label": "Singularity / Apptainer",
-        "description": "Run commands in a Singularity/Apptainer container (HPC-friendly, rootless).",
-    },
-    {
-        "name": "modal",
-        "label": "Modal",
-        "description": "Run commands in a Modal cloud sandbox.",
-    },
-    {
-        "name": "daytona",
-        "label": "Daytona",
-        "description": "Run commands in a Daytona cloud sandbox.",
     },
     {
         "name": "ssh",
@@ -16333,42 +16024,6 @@ def _terminal_cfg_value(terminal_cfg: dict, key: str, env_var: str) -> str:
         return ""
 
 
-def _probe_docker_backend() -> tuple:
-    if not shutil.which("docker"):
-        return (
-            "needs_setup",
-            "Docker CLI not found — install Docker Desktop or docker-ce.",
-        )
-    try:
-        proc = subprocess.run(
-            ["docker", "info", "--format", "{{.ServerVersion}}"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=2,
-        )
-        if proc.returncode == 0:
-            return ("ready", "")
-        return (
-            "needs_setup",
-            "Docker daemon not reachable — start Docker and retry.",
-        )
-    except subprocess.TimeoutExpired:
-        return ("needs_setup", "Docker daemon not responding (timed out).")
-    except Exception as exc:
-        return ("unavailable", f"Docker probe failed: {exc}")
-
-
-def _probe_singularity_backend() -> tuple:
-    if shutil.which("singularity") or shutil.which("apptainer"):
-        return ("ready", "")
-    return (
-        "needs_setup",
-        "Neither singularity nor apptainer found on PATH.",
-    )
-
-
 def _probe_ssh_backend(terminal_cfg: dict) -> tuple:
     host = _terminal_cfg_value(terminal_cfg, "ssh_host", "TERMINAL_SSH_HOST")
     user = _terminal_cfg_value(terminal_cfg, "ssh_user", "TERMINAL_SSH_USER")
@@ -16385,53 +16040,13 @@ def _probe_ssh_backend(terminal_cfg: dict) -> tuple:
     return ("ready", f"{user}@{host}")
 
 
-def _probe_modal_backend() -> tuple:
-    try:
-        from tools.tool_backend_helpers import has_direct_modal_credentials
-
-        if has_direct_modal_credentials():
-            return ("ready", "")
-    except Exception:
-        pass
-    try:
-        from hermes_cli.config import get_env_value
-
-        if get_env_value("MODAL_TOKEN_ID") and get_env_value("MODAL_TOKEN_SECRET"):
-            return ("ready", "")
-    except Exception:
-        pass
-    return (
-        "needs_setup",
-        "Modal credentials not found — set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET (or run `modal setup`).",
-    )
-
-
-def _probe_daytona_backend() -> tuple:
-    try:
-        from hermes_cli.config import get_env_value
-
-        if get_env_value("DAYTONA_API_KEY"):
-            return ("ready", "")
-    except Exception:
-        pass
-    return ("needs_setup", "Set DAYTONA_API_KEY to use the Daytona backend.")
-
-
 def _probe_terminal_backend(name: str, terminal_cfg: dict) -> tuple:
     """Return ``(status, detail)`` for one backend. Never raises."""
     try:
         if name == "local":
             return ("ready", "")
-        if name == "docker":
-            return _probe_docker_backend()
-        if name == "singularity":
-            return _probe_singularity_backend()
         if name == "ssh":
             return _probe_ssh_backend(terminal_cfg)
-        if name == "modal":
-            return _probe_modal_backend()
-        if name == "daytona":
-            return _probe_daytona_backend()
         return ("unavailable", f"Unknown backend: {name}")
     except Exception as exc:  # pragma: no cover — belt-and-braces guard
         return ("unavailable", f"Probe failed: {exc}")
@@ -19988,8 +19603,7 @@ def start_server(
                 "    (hash with: python -c \"from "
                 "plugins.dashboard_auth.basic import hash_password; "
                 "print(hash_password('your-password'))\")\n"
-                "  • OAuth: run `horo dashboard register` (Nous Portal) or "
-                "install a DashboardAuthProvider plugin.\n"
+                "  • Or install an internal DashboardAuthProvider plugin.\n"
                 "There is no unauthenticated public-bind option — to keep it "
                 "local, bind 127.0.0.1 and tunnel in (SSH / Tailscale)."
             )

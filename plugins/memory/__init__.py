@@ -277,8 +277,7 @@ def _load_provider_from_dir(provider_dir: Path) -> Optional["MemoryProvider"]:
         mod = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = mod
 
-        # Register submodules so relative imports work
-        # e.g., "from .store import MemoryStore" in holographic plugin
+        # Register submodules so relative imports work.
         for sub_file in provider_dir.glob("*.py"):
             if sub_file.name == "__init__.py":
                 continue
@@ -348,18 +347,8 @@ class _ProviderCollector:
 
 
 def _get_active_memory_provider() -> Optional[str]:
-    """Read the active memory provider name from config.yaml.
-
-    Returns the provider name (e.g. ``"honcho"``) or None if no
-    external provider is configured.  Lightweight — only reads config,
-    no plugin loading.
-    """
-    try:
-        from hermes_cli.config import load_config
-        config = load_config()
-        return cfg_get(config, "memory", "provider") or None
-    except Exception:
-        return None
+    """External memory providers are disabled in the lite build."""
+    return None
 
 
 def discover_plugin_cli_commands() -> List[dict]:
@@ -445,7 +434,7 @@ def discover_plugin_cli_commands() -> List[dict]:
                 pass
 
         handler_fn = getattr(cli_mod, f"{active_provider}_command", None) or \
-                     getattr(cli_mod, "honcho_command", None)
+                     getattr(cli_mod, "memory_command", None)
 
         results.append({
             "name": active_provider,

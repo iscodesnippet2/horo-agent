@@ -170,9 +170,7 @@ _PLATFORM_MAP = {
     "windows": "win32",
 }
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_REMOTE_ENV_BACKENDS = frozenset(
-    {"docker", "singularity", "modal", "ssh", "daytona"}
-)
+_REMOTE_ENV_BACKENDS = frozenset({"ssh"})
 _secret_capture_callback = None
 
 

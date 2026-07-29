@@ -340,11 +340,7 @@ _WRITE_TARGET_BOUNDARY = r'(?=[\s;&|<>"\']|$)'
 # their files and services, not trusting it to wipe the disk or power the
 # box off.
 #
-# Hardline only applies to environments that can actually damage the host
-# (local, ssh, container-host cron).  Containerized backends (docker,
-# singularity, modal, daytona) already bypass the dangerous-command layer
-# because nothing they do can touch the host, so we leave that behavior
-# alone.
+# Hardline applies to enterprise-lite terminal environments (local and ssh).
 #
 # The list is deliberately tiny — only things with no recovery path:
 # filesystem destruction rooted at /, raw block device overwrites, kernel
@@ -2861,17 +2857,12 @@ def _run_approval_gate(
 
 
 def _should_skip_container_guards(env_type: str, has_host_access: bool = False) -> bool:
-    """Return True when the backend is isolated enough to skip dangerous-command prompts.
+    """Return True when the backend can skip dangerous-command prompts.
 
-    Isolated container backends sandbox the agent away from the host, so their
-    commands can't damage real files/services and we skip the approval layer.
-    Docker is the exception once host paths are bind-mounted into the container:
-    at that point a command like ``rm -rf /workspace`` reaches host files, so it
-    must go through the normal approval flow.
+    Enterprise-lite supports only local and SSH terminal execution. Neither is
+    isolated enough to skip approval prompts.
     """
-    if env_type == "docker":
-        return not has_host_access
-    return env_type in ("singularity", "modal", "daytona")
+    return False
 
 
 def check_dangerous_command(command: str, env_type: str,
@@ -2884,10 +2875,9 @@ def check_dangerous_command(command: str, env_type: str,
 
     Args:
         command: The shell command to check.
-        env_type: Terminal backend type ('local', 'ssh', 'docker', etc.).
+        env_type: Terminal backend type ('local' or 'ssh').
         approval_callback: Optional CLI callback for interactive prompts.
-        has_host_access: True when a Docker sandbox bind-mounts host paths,
-            so its commands can reach the host and must not skip approval.
+        has_host_access: Retained for API compatibility; ignored in lite.
 
     Returns:
         {"approved": True/False, "message": str or None, ...}

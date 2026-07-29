@@ -601,7 +601,7 @@ export default function ProfileBuilderPage() {
                     <div className="grid gap-1.5">
                       <Label>Authentication</Label>
                       <div
-                        className="grid grid-cols-3 border border-border bg-background/30 p-0.5 md:max-w-md"
+                        className="grid grid-cols-2 border border-border bg-background/30 p-0.5 md:max-w-md"
                         role="group"
                         aria-label="HTTP authentication"
                       >
@@ -609,7 +609,6 @@ export default function ProfileBuilderPage() {
                           [
                             ["none", "None"],
                             ["header", "Bearer token"],
-                            ["oauth", "OAuth"],
                           ] as const
                         ).map(([value, label]) => (
                           <button
@@ -652,12 +651,6 @@ export default function ProfileBuilderPage() {
                           keeps only an environment-variable reference.
                         </p>
                       </div>
-                    )}
-                    {mcpDraft.httpAuth === "oauth" && (
-                      <p className="text-xs text-muted-foreground">
-                        After creating the profile, open its MCP page and use
-                        Authenticate to complete OAuth.
-                      </p>
                     )}
                   </>
                 ) : (

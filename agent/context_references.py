@@ -353,15 +353,10 @@ async def _fetch_url_content(
 
 
 async def _default_url_fetcher(url: str) -> str:
-    from tools.web_tools import web_extract_tool
-
-    raw = await web_extract_tool([url], format="markdown")
-    payload = json.loads(raw)
-    docs = payload.get("results", [])
-    if not docs:
-        return ""
-    doc = docs[0]
-    return str(doc.get("content") or doc.get("raw_content") or "").strip()
+    return (
+        f"URL context references are disabled in the lite build: {url}. "
+        "Use browser_navigate for internal web applications or curl from the terminal for plain text endpoints."
+    )
 
 
 def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -> Path:

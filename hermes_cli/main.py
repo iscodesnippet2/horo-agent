@@ -452,7 +452,11 @@ from hermes_cli.subcommands.dashboard import build_dashboard_parser
 from hermes_cli.subcommands.gui import build_gui_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
-from hermes_cli.subcommands.memory import build_memory_parser
+try:
+    from hermes_cli.subcommands.memory import build_memory_parser
+except ModuleNotFoundError:
+    def build_memory_parser(*args, **kwargs):
+        return None
 from hermes_cli.subcommands.acp import build_acp_parser
 from hermes_cli.subcommands.tools import build_tools_parser
 from hermes_cli.subcommands.insights import build_insights_parser
@@ -761,7 +765,6 @@ from hermes_cli import __version__, __release_date__
 from hermes_cli.model_setup_flows import (
     _prompt_auth_credentials_choice,
     _model_flow_openrouter,
-    _model_flow_nous,
     _model_flow_openai_codex,
     _model_flow_xai_oauth,
     _model_flow_qwen_oauth,
@@ -1008,7 +1011,7 @@ def _has_any_provider_configured() -> bool:
     except Exception:
         pass
 
-    # Check for Nous Portal OAuth credentials
+    # Check legacy auth credentials.
     auth_file = get_hermes_home() / "auth.json"
     if auth_file.exists():
         try:
@@ -2656,14 +2659,9 @@ def cmd_gateway(args):
 
 
 def cmd_proxy(args):
-    """Local OpenAI-compatible proxy to OAuth providers."""
-    # Lazy import — pulls in aiohttp, which is gated behind an extras install
-    # for users who don't run the proxy or the messaging gateway.
-    from hermes_cli.proxy.cli import cmd_proxy as _cmd_proxy
-
-    rc = _cmd_proxy(args)
-    if isinstance(rc, int) and rc != 0:
-        raise SystemExit(rc)
+    """Proxy is disabled in the lite build."""
+    print("Proxy / managed egress is disabled in the lite build.")
+    raise SystemExit(1)
 
 
 def cmd_whatsapp(args):
@@ -3314,7 +3312,7 @@ def select_provider_and_model(args=None):
     elif selected_provider == "moa":
         _model_flow_moa(config, current_model)
     elif selected_provider == "nous":
-        _model_flow_nous(config, current_model, args=args)
+        print("Nous Portal is disabled in the lite build.")
     elif selected_provider == "openai-codex":
         _model_flow_openai_codex(config, current_model)
     elif selected_provider == "xai-oauth":
@@ -3573,8 +3571,8 @@ def _aux_config_menu() -> None:
         print()
         print("  Side tasks (vision, compression, web extraction, etc.) default")
         print('  to your main chat model.  "auto" means "use my main model" —')
-        print("  Hermes only falls back to a lightweight backend (OpenRouter,")
-        print("  Nous Portal) if the main model is unavailable.  Override a")
+        print("  Hermes only falls back to a configured internal backend if")
+        print("  the main model is unavailable.  Override a")
         print("  task below if you want it pinned to a specific provider/model.")
         print()
 
@@ -13718,8 +13716,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     the June 2026 hardening), and ``start_server`` fails closed when no
     ``DashboardAuthProvider`` is registered. Rather than greet an interactive
     operator with that hard error, prompt them to set up the bundled
-    username/password provider on the spot — or point them at
-    ``horo dashboard register`` for OAuth.
+    username/password provider on the spot.
 
     No-ops (so the existing fail-closed ``SystemExit`` remains the backstop)
     when:
@@ -13760,8 +13757,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     print()
     print("  How do you want to authenticate the dashboard?")
     print("    [1] Username & password (quickest; for a trusted LAN / VPN)")
-    print("    [2] OAuth via Nous Portal (run `horo dashboard register`)")
-    print("    [3] Cancel")
+    print("    [2] Cancel")
     print()
 
     try:
@@ -13769,19 +13765,6 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     except (EOFError, KeyboardInterrupt):
         print("\n  Cancelled.")
         sys.exit(1)
-
-    if choice == "2":
-        print()
-        print(
-            "  Run this on the host where the dashboard lives, then start "
-            "the dashboard again:\n"
-            "    horo dashboard register\n"
-            "  It provisions a Nous Portal OAuth client and writes "
-            "HERMES_DASHBOARD_OAUTH_CLIENT_ID into ~/.hermes/.env for you.\n"
-            "  Docs: https://hermes-agent.nousresearch.com/docs/"
-            "user-guide/features/web-dashboard#authentication-gated-mode"
-        )
-        sys.exit(0)
 
     if choice not in ("1",):
         print("  Cancelled.")
@@ -14272,10 +14255,9 @@ def cmd_dashboard(args):
 
 
 def cmd_dashboard_register(args):
-    """Register a self-hosted dashboard OAuth client with Nous Portal."""
-    from hermes_cli.dashboard_register import cmd_dashboard_register as _impl
-
-    _impl(args)
+    """Disable managed dashboard OAuth registration in the lite build."""
+    print("Dashboard OAuth registration is disabled in the lite build.")
+    return 1
 
 
 def cmd_gateway_enroll(args):
@@ -14363,11 +14345,11 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
-        "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
+        "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "pairing", "pets", "plugins", "portal", "profile",
-        "project", "proxy",
+        "model", "pairing", "pets", "plugins", "profile",
+        "project",
         "prompt-size",
         "send", "sessions", "setup",
         "skin", "skills", "slack", "status", "tools", "uninstall", "update",

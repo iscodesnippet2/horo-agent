@@ -673,8 +673,7 @@ def _run_review_in_thread(
             _rt = _resolve_review_runtime(agent)
             _routed = bool(_rt.get("routed"))
             # skip_memory=True keeps the review fork from
-            # touching external memory plugins (honcho, mem0,
-            # supermemory, etc.).  Without it, the fork's
+            # touching memory. Without it, the fork's
             # __init__ rebuilds its own _memory_manager from
             # config, scoped to the parent's session_id, and
             # run_conversation() then leaks the harness prompt

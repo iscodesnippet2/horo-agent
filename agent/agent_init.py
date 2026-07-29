@@ -1651,8 +1651,7 @@ def init_agent(
                     if _init_kwargs["platform"] == "cli":
                         _init_kwargs["warning_callback"] = agent._emit_warning
                         _init_kwargs["status_callback"] = agent._emit_status
-                    # Thread session title for memory provider scoping
-                    # (e.g. honcho uses this to derive chat-scoped session keys)
+                    # Thread session title for memory scoping.
                     if agent._session_db:
                         try:
                             _st = agent._session_db.get_session_title(agent.session_id)

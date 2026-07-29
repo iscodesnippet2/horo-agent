@@ -604,7 +604,7 @@ def get_sandbox_mirror_warning(path: str) -> Optional[str]:
     return (
         f"Sandbox-mirror write blocked by soft guard: {info['target_path']} "
         f"sits under {info['mirror_root']!r}, which is a per-task mirror "
-        f"created by a non-local terminal backend (docker/daytona/etc.). "
+        f"created by a non-local terminal backend. "
         f"Writes here land on a copy that the host Hermes process never "
         f"reads — the authoritative file is likely {info['inner_path']!r} "
         f"under the real HERMES_HOME. Use the host-side tool for "
@@ -617,18 +617,15 @@ def get_sandbox_mirror_warning(path: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Container-context mirror guard (inner-container case — #32049 follow-up)
+# Container-context mirror guard (legacy inner-container case)
 #
 # Brian's shape-based detector (#32213) catches paths that still carry the
 # full ``…/sandboxes/<backend>/<task>/home/.hermes/…`` prefix on the host.
-# But when file tools execute *inside* the container the bind-mount strips
-# that prefix: the agent sees plain ``/root/.hermes/…``.  The root:root
-# ownership on the divergent SOUL.md in #32049 confirms this is the primary
-# failure mode.
+# But when file tools execute *inside* a container the bind-mount strips
+# that prefix: the agent sees plain ``/root/.hermes/…``.
 #
-# Fix: file_tools passes the active Docker mirror prefix when the terminal
-# backend is docker + persistent. This catches the very first file-tool call,
-# before a DockerEnvironment object necessarily exists.
+# Enterprise-lite does not ship container terminal backends, so callers pass
+# no active mirror prefix.
 # ---------------------------------------------------------------------------
 
 

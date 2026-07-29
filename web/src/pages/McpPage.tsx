@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { KeyRound, Package, Power, Server, Trash2, X, Zap } from "lucide-react";
+import { Package, Power, Server, Trash2, X, Zap } from "lucide-react";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Select, SelectOption } from "@nous-research/ui/ui/components/select";
@@ -27,7 +27,6 @@ import {
   buildMcpServerCreate,
   type McpTransport,
 } from "@/lib/mcp-server-create";
-import { completeMcpDashboardOAuth } from "@/lib/mcp-dashboard-oauth";
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
@@ -73,7 +72,6 @@ export default function McpPage() {
 
   // Test results keyed by server name
   const [testing, setTesting] = useState<string | null>(null);
-  const [authenticating, setAuthenticating] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, McpTestResult>>(
     {},
   );
@@ -141,12 +139,7 @@ export default function McpPage() {
     setCreating(true);
     try {
       await api.addMcpServer(body);
-      showToast(
-        transport === "http" && httpAuth === "oauth"
-          ? "Added — authenticate with OAuth"
-          : "Add ✓",
-        "success",
-      );
+      showToast("Add ✓", "success");
       setName("");
       setUrl("");
       setHttpAuth("none");
@@ -178,27 +171,6 @@ export default function McpPage() {
       showToast(`Error: ${e}`, "error");
     } finally {
       setTesting(null);
-    }
-  };
-
-  const handleAuthenticate = async (server: McpServer) => {
-    setAuthenticating(server.name);
-    try {
-      const result = await completeMcpDashboardOAuth({
-        serverName: server.name,
-        start: api.authMcpServer,
-        status: api.getMcpOAuthFlow,
-        open: window.open.bind(window),
-      });
-      setTestResults((prev) => ({
-        ...prev,
-        [server.name]: { ok: true, tools: result.tools ?? [] },
-      }));
-      showToast(`${server.name}: OAuth authentication complete`, "success");
-    } catch (e) {
-      showToast(`OAuth error: ${e}`, "error");
-    } finally {
-      setAuthenticating(null);
     }
   };
 
@@ -426,7 +398,6 @@ export default function McpPage() {
                     >
                       <SelectOption value="none">None</SelectOption>
                       <SelectOption value="header">Bearer token</SelectOption>
-                      <SelectOption value="oauth">OAuth</SelectOption>
                     </Select>
                   </div>
                   {httpAuth === "header" && (
@@ -445,13 +416,6 @@ export default function McpPage() {
                         only an environment-variable reference.
                       </p>
                     </div>
-                  )}
-                  {httpAuth === "oauth" && (
-                    <p className="text-xs text-muted-foreground">
-                      Add the server, then use Authenticate. Hermes opens the
-                      OAuth browser on the machine running the Dashboard
-                      backend.
-                    </p>
                   )}
                 </>
               ) : (
@@ -677,24 +641,6 @@ export default function McpPage() {
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
-                  {server.auth === "oauth" && (
-                    <Button
-                      ghost
-                      size="sm"
-                      title="Authenticate with OAuth"
-                      onClick={() => handleAuthenticate(server)}
-                      disabled={authenticating === server.name}
-                      prefix={
-                        authenticating === server.name ? (
-                          <Spinner />
-                        ) : (
-                          <KeyRound />
-                        )
-                      }
-                    >
-                      Authenticate
-                    </Button>
-                  )}
 
                   <Button
                     ghost

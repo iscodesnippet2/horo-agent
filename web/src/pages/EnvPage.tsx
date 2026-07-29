@@ -21,7 +21,6 @@ import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useConfirmDelete } from "@nous-research/ui/hooks/use-confirm-delete";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
-import { OAuthProvidersCard } from "@/components/OAuthProvidersCard";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { ListItem } from "@nous-research/ui/ui/components/list-item";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
@@ -626,7 +625,6 @@ export default function EnvPage() {
   // Scroll-to sub-nav in the page header
   const sections = useMemo(() => {
     const items: { id: string; label: string }[] = [
-      { id: "section-oauth", label: "OAuth" },
       { id: "section-providers", label: "Providers" },
     ];
     if (vars) {
@@ -932,13 +930,6 @@ export default function EnvPage() {
         >
           {showAdvanced ? t.env.hideAdvanced : t.env.showAdvanced}
         </Button>
-      </div>
-
-      <div id="section-oauth">
-        <OAuthProvidersCard
-          onError={(msg) => showToast(msg, "error")}
-          onSuccess={(msg) => showToast(msg, "success")}
-        />
       </div>
 
       <Card id="section-providers">
