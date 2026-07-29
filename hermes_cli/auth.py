@@ -252,7 +252,11 @@ def get_anthropic_key() -> str:
     """
     from hermes_cli.config import get_env_value_prefer_dotenv
 
-    for var in PROVIDER_REGISTRY["anthropic"].api_key_env_vars:
+    provider = PROVIDER_REGISTRY.get("anthropic")
+    if provider is None:
+        return ""
+
+    for var in provider.api_key_env_vars:
         value = get_env_value_prefer_dotenv(var) or ""
         if value:
             return value

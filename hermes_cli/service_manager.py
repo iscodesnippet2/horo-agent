@@ -17,6 +17,7 @@ profile create/delete hooks (Phase 4) and the s6 dispatch path in
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -102,11 +103,20 @@ def detect_service_manager() -> ServiceManagerKind:
     # Imports deferred so importing this module doesn't drag in the
     # whole gateway dependency graph for callers that only need the
     # Protocol type or validate_profile_name().
-    from hermes_cli.gateway import (
-        is_macos,
-        is_windows,
-        supports_systemd_services,
-    )
+    try:
+        from hermes_cli.gateway import (
+            is_macos,
+            is_windows,
+            supports_systemd_services,
+        )
+    except ModuleNotFoundError:
+        if _s6_running():
+            return "s6"
+        if sys.platform == "win32":
+            return "windows"
+        if sys.platform == "darwin":
+            return "launchd"
+        return "none"
 
     # Gate on _s6_running() alone (PID 1 comm == s6-svscan AND /run/s6/basedir),
     # NOT is_container(): the latter only detects Docker/Podman/lxc, so it is
