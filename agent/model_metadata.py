@@ -725,6 +725,25 @@ def _localhost_to_ipv4(url: str) -> str:
     )
 
 
+def _is_loopback_endpoint(base_url: str) -> bool:
+    """Return True only for localhost/loopback endpoints."""
+    normalized = _normalize_base_url(base_url)
+    if not normalized:
+        return False
+    url = normalized if "://" in normalized else f"http://{normalized}"
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     """Detect which local server is running at base_url by probing known endpoints.
 
@@ -1000,7 +1019,7 @@ def fetch_endpoint_model_metadata(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     last_error: Optional[Exception] = None
 
-    if is_local_endpoint(normalized):
+    if _is_loopback_endpoint(normalized):
         try:
             if detect_local_server_type(normalized, api_key=api_key) == "lm-studio":
                 server_url = _lmstudio_server_root(normalized)

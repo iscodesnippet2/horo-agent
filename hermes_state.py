@@ -634,8 +634,8 @@ def _log_wal_reset_bug_once(
         "%s: linked SQLite %s is vulnerable to the WAL-reset corruption "
         "bug (https://sqlite.org/wal.html#walresetbug) — %s. "
         "Upgrade to SQLite 3.51.3+ (or backports 3.50.7 / 3.44.6); "
-        "Hermes-managed installs can repair the embedded runtime with "
-        "`hermes update`. See `hermes doctor`. This warning fires once per "
+        "Horo-managed installs can repair the embedded runtime with "
+        "`horo update`. See `horo doctor`. This warning fires once per "
         "process per database.",
         db_label,
         sqlite3.sqlite_version,

@@ -106,6 +106,22 @@ def _relay_moa_reference_event(agent: Any, event: str, **kwargs: Any) -> None:
         pass
 
 
+def _should_probe_ollama_num_ctx(agent: Any) -> bool:
+    """Return True only for endpoints where init-time Ollama probing is cheap."""
+    provider = str(getattr(agent, "provider", "") or "").strip().lower()
+    if provider in {"ollama", "lmstudio", "lm-studio"}:
+        return True
+    base_url = str(getattr(agent, "base_url", "") or "").strip()
+    if not base_url:
+        return False
+    try:
+        parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
+        host = (parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"} or host.startswith("127.")
+
+
 def _normalize_route_base_url(base_url: Any) -> str:
     """Canonicalize an endpoint URL for model-route identity comparisons."""
     return normalize_route_base_url(base_url)
@@ -1250,13 +1266,13 @@ def init_agent(
                         raise RuntimeError(
                             f"Provider '{_explicit}' is set in config.yaml but no API key "
                             f"was found. Set the {_env_hint} environment "
-                            f"variable, or switch to a different provider with `hermes model`."
+                            f"variable, or switch to a different provider with `horo model`."
                         )
                 if not getattr(agent, "_fallback_activated", False):
                     # No provider configured — reject with a clear message.
                     raise RuntimeError(
-                        "No LLM provider configured. Run `hermes model` to "
-                        "select a provider, or run `hermes setup` for first-time "
+                        "No LLM provider configured. Run `horo model` to "
+                        "select a provider, or run `horo setup` for first-time "
                         "configuration."
                     )
         
@@ -1336,9 +1352,14 @@ def init_agent(
                 key_used = client_kwargs.get("api_key", "none")
                 if is_token_provider(key_used):
                     print("🔑 Using credentials: Microsoft Entra ID")
-                elif isinstance(key_used, str) and key_used and key_used != "dummy-key" and len(key_used) > 12:
+                elif (
+                    isinstance(key_used, str)
+                    and key_used
+                    and key_used not in {"dummy", "dummy-key"}
+                    and len(key_used) > 12
+                ):
                     print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-                else:
+                elif key_used not in {"dummy", "dummy-key"}:
                     print("⚠️  Warning: API key appears invalid or missing")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
@@ -2547,7 +2568,7 @@ def init_agent(
             agent._ollama_num_ctx = int(_ollama_num_ctx_override)
         except (TypeError, ValueError):
             _ra().logger.debug("Invalid ollama_num_ctx config value: %r", _ollama_num_ctx_override)
-    if agent._ollama_num_ctx is None and agent.base_url and is_local_endpoint(agent.base_url):
+    if agent._ollama_num_ctx is None and _should_probe_ollama_num_ctx(agent):
         try:
             # ``agent.api_key`` may be a callable (Entra token provider).
             # Ollama detection makes a manual HTTP request and expects a

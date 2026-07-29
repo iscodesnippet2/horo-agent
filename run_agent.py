@@ -132,6 +132,40 @@ else:
     logger.info("No .env file found. Using system environment variables.")
 
 
+def _load_standalone_runtime_defaults() -> Dict[str, str]:
+    """Return model runtime defaults for the standalone ``horo-agent`` entrypoint."""
+    try:
+        from hermes_cli.config import get_env_value, load_config
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+        get_env_value = lambda _name: ""  # noqa: E731
+
+    model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+
+    api_key = str(model_cfg.get("api_key") or "").strip()
+    if not api_key:
+        try:
+            api_key = str(get_env_value("OPENAI_API_KEY") or "").strip()
+        except Exception:
+            api_key = ""
+
+    provider = str(model_cfg.get("provider") or "custom").strip() or "custom"
+    base_url = str(model_cfg.get("base_url") or "").strip()
+    if not api_key and provider == "custom" and base_url:
+        api_key = "dummy"
+
+    return {
+        "provider": provider,
+        "api_mode": str(model_cfg.get("api_mode") or "chat_completions").strip() or "chat_completions",
+        "model": str(model_cfg.get("default") or model_cfg.get("model") or "").strip(),
+        "base_url": base_url,
+        "api_key": api_key,
+    }
+
+
 # Import our tool system
 from model_tools import (
     get_tool_definitions,  # noqa: F401  # re-exported for tests that mock.patch("run_agent.get_tool_definitions")
@@ -6761,6 +6795,8 @@ def main(
     model: str = "",
     api_key: str = None,
     base_url: str = "",
+    provider: str = "",
+    api_mode: str = "",
     max_turns: int = 10,
     enabled_toolsets: str = None,
     disabled_toolsets: str = None,
@@ -6774,10 +6810,12 @@ def main(
     Main function for running the agent directly.
 
     Args:
-        query (str): Natural language query for the agent. Defaults to Python 3.13 example.
-        model (str): Model name to use (OpenRouter format: provider/model). Defaults to anthropic/claude-sonnet-4.6.
-        api_key (str): API key for authentication. Uses OPENROUTER_API_KEY env var if not provided.
-        base_url (str): Base URL for the model API. Defaults to https://openrouter.ai/api/v1
+        query (str): Natural language query for the agent. Defaults to a short hello prompt.
+        model (str): Model name to use. Defaults to model.default in ~/.horo-agent/config.yaml.
+        api_key (str): API key for authentication. Uses OPENAI_API_KEY env var if not provided.
+        base_url (str): Base URL for the model API. Defaults to model.base_url in ~/.horo-agent/config.yaml.
+        provider (str): Provider name. Defaults to model.provider in ~/.horo-agent/config.yaml.
+        api_mode (str): Wire protocol. Defaults to model.api_mode in ~/.horo-agent/config.yaml.
         max_turns (int): Maximum number of API call iterations. Defaults to 10.
         enabled_toolsets (str): Comma-separated list of toolsets to enable. Supports predefined
                               toolsets (e.g., "research", "development", "safe").
@@ -6894,6 +6932,13 @@ def main(
         print("💾 Trajectory saving: ENABLED")
         print("   - Successful conversations → trajectory_samples.jsonl")
         print("   - Failed conversations → failed_trajectories.jsonl")
+
+    defaults = _load_standalone_runtime_defaults()
+    model = model or defaults["model"]
+    base_url = base_url or defaults["base_url"]
+    api_key = api_key or defaults["api_key"]
+    provider = provider or defaults["provider"]
+    api_mode = api_mode or defaults["api_mode"]
     
     # Initialize agent with provided parameters
     try:
@@ -6901,6 +6946,8 @@ def main(
             base_url=base_url,
             model=model,
             api_key=api_key,
+            provider=provider,
+            api_mode=api_mode,
             max_iterations=max_turns,
             enabled_toolsets=enabled_toolsets_list,
             disabled_toolsets=disabled_toolsets_list,
@@ -6912,12 +6959,9 @@ def main(
         print(f"❌ Failed to initialize agent: {e}")
         return
     
-    # Use provided query or default to Python 3.13 example
+    # Use provided query or a small offline-friendly smoke-test prompt.
     if query is None:
-        user_query = (
-            "Tell me about the latest developments in Python 3.13 and what new features "
-            "developers should know about. Please search for current information and try it out."
-        )
+        user_query = "Say hello in one short sentence."
     else:
         user_query = query
     
@@ -6970,6 +7014,11 @@ def main(
     print("\n👋 Agent execution completed!")
 
 
-if __name__ == "__main__":
+def cli_main():
+    """Console-script entrypoint for ``horo-agent``."""
     import fire
     fire.Fire(main)
+
+
+if __name__ == "__main__":
+    cli_main()

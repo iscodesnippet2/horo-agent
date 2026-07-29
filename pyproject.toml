@@ -206,7 +206,7 @@ Upstream = "https://github.com/NousResearch/hermes-agent"
 
 [project.scripts]
 horo = "hermes_cli.main:main"
-horo-agent = "run_agent:main"
+horo-agent = "run_agent:cli_main"
 horo-acp = "acp_adapter.entry:main"
 
 [tool.setuptools]
