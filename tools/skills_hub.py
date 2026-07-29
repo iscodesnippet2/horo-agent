@@ -3,7 +3,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SKILLS_DIR = Path.home() / ".hermes" / "skills"
+from hermes_constants import get_hermes_home
+
+SKILLS_DIR = get_hermes_home() / "skills"
 
 
 @dataclass

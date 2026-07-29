@@ -126,7 +126,9 @@ def hermes_lsp_bin_dir() -> Path:
     """Return the Hermes-owned bin staging dir for LSP servers."""
     home = os.environ.get("HERMES_HOME")
     if home is None:
-        home = os.path.join(os.path.expanduser("~"), ".hermes")
+        from hermes_constants import get_default_hermes_root
+
+        home = str(get_default_hermes_root())
     p = Path(home) / "lsp" / "bin"
     p.mkdir(parents=True, exist_ok=True)
     return p

@@ -660,10 +660,12 @@ def _resolve_stdio_command(command: str, env: dict) -> tuple[str, dict]:
             resolved_command = which_hit
         elif resolved_command in {"npx", "npm", "node"}:
             hermes_home = os.path.expanduser(
-                os.getenv(
-                    "HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes")
-                )
+                os.getenv("HERMES_HOME", "")
             )
+            if not hermes_home:
+                from hermes_constants import get_default_hermes_root
+
+                hermes_home = str(get_default_hermes_root())
             candidates = [
                 os.path.join(hermes_home, "node", "bin", resolved_command),
                 os.path.join(os.path.expanduser("~"), ".local", "bin", resolved_command),
