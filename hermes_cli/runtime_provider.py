@@ -1790,6 +1790,17 @@ def resolve_runtime_provider(
         explicit_base_url=explicit_base_url,
     )
     model_cfg = _get_model_config()
+    cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
+    cfg_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
+    if provider == "custom" and cfg_provider == "custom" and cfg_base_url:
+        runtime = _resolve_named_custom_runtime(
+            requested_provider="custom",
+            explicit_api_key=explicit_api_key,
+            explicit_base_url=explicit_base_url or cfg_base_url,
+        )
+        if runtime:
+            runtime["requested_provider"] = requested_provider
+            return runtime
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,
         requested_provider=requested_provider,
@@ -1803,8 +1814,6 @@ def resolve_runtime_provider(
 
     should_use_pool = provider != "openrouter"
     if provider == "openrouter":
-        cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-        cfg_base_url = str(model_cfg.get("base_url") or "").strip()
         env_openai_base_url = _getenv("OPENAI_BASE_URL", "").strip()
         env_openrouter_base_url = _getenv("OPENROUTER_BASE_URL", "").strip()
         has_custom_endpoint = bool(
