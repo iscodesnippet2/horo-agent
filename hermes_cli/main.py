@@ -15009,6 +15009,13 @@ def main():
     # =========================================================================
     build_status_parser(subparsers, cmd_status=cmd_status)
 
+    # =========================================================================
+    # cron command — local-only scheduled task management
+    # =========================================================================
+    from hermes_cli.cron import build_parser as _build_cron_parser
+
+    _build_cron_parser(subparsers)
+
 
     # =========================================================================
     # kanban command — multi-profile collaboration board
