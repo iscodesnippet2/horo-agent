@@ -216,10 +216,19 @@ def run_oneshot(
         return 2
     use_config_toolsets = _normalize_toolsets(toolsets) is None
 
-    # Auto-approve any shell / tool approvals.  Non-interactive by
-    # definition — a prompt would hang forever.
-    os.environ["HERMES_YOLO_MODE"] = "1"
-    os.environ["HERMES_ACCEPT_HOOKS"] = "1"
+    # Auto-approve any shell / tool approvals for ordinary one-shot use.
+    # Cron is the exception: it has a dedicated non-interactive approval policy
+    # (approvals.cron_mode) keyed by HERMES_CRON_SESSION, so do not silently
+    # upgrade scheduled jobs to YOLO.
+    _is_cron_session = os.getenv("HERMES_CRON_SESSION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not _is_cron_session:
+        os.environ["HERMES_YOLO_MODE"] = "1"
+        os.environ["HERMES_ACCEPT_HOOKS"] = "1"
 
     # One-shot prints a single final response and exits: there is no later turn
     # for a detached subagent's completion to re-enter, and nothing here drains

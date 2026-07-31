@@ -14747,6 +14747,18 @@ def cmd_memory(args):
             "\n  Memory reset complete. New sessions will start with a blank slate."
         )
         print(f"  Files were in: {display_hermes_home()}/memories/\n")
+    elif sub in {"pending", "approve", "reject", "approval"}:
+        from hermes_cli.write_approval_commands import handle_pending_subcommand
+        from tools import write_approval as wa
+        from tools.memory_tool import load_on_disk_store
+
+        extra = list(getattr(args, "args", []) or [])
+        out = handle_pending_subcommand(
+            wa.MEMORY,
+            [sub, *extra],
+            memory_store=load_on_disk_store(),
+        )
+        print(out or "Unknown memory approval command.")
     else:
         from hermes_cli.memory_setup import memory_command
 

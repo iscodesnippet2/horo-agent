@@ -26,6 +26,19 @@ def _iso(dt: datetime | None = None) -> str:
     return (dt or _now()).replace(microsecond=0).isoformat()
 
 
+def _parse_iso(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _cron_dir() -> Path:
     home = _store_home_override or get_hermes_home()
     return home / "cron"
@@ -132,6 +145,14 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _find_job_index(jobs: list[dict[str, Any]], job_id: str) -> int | None:
+    ref = str(job_id or "").strip()
+    for index, job in enumerate(jobs):
+        if _job_matches(job, ref):
+            return index
+    return None
+
+
 def list_jobs(include_disabled: bool = False) -> list[dict[str, Any]]:
     jobs = [_format_job(job) for job in _load_jobs()]
     if not include_disabled:
@@ -145,6 +166,20 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         if _job_matches(job, ref):
             return _format_job(job)
     return None
+
+
+def due_jobs(now: datetime | None = None) -> list[dict[str, Any]]:
+    now = now or _now()
+    jobs: list[dict[str, Any]] = []
+    for job in _load_jobs():
+        if job.get("state", "enabled") == "paused":
+            continue
+        if job.get("running"):
+            continue
+        next_run = _parse_iso(job.get("next_run_at"))
+        if next_run is not None and next_run <= now:
+            jobs.append(_format_job(job))
+    return jobs
 
 
 def create_job(
@@ -273,6 +308,67 @@ def trigger_job(job_id: str) -> dict[str, Any] | None:
             _save_jobs(jobs)
             return _format_job(stored)
     return None
+
+
+def claim_due_job(job_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+    jobs = _load_jobs()
+    index = _find_job_index(jobs, str(job_id))
+    if index is None:
+        return None
+    job = jobs[index]
+    if job.get("state", "enabled") == "paused" or job.get("running"):
+        return None
+    next_run = _parse_iso(job.get("next_run_at"))
+    if next_run is None or next_run > _now():
+        return None
+    run_id = run_id or ("run_" + secrets.token_hex(6))
+    job["running"] = True
+    job["current_run_id"] = run_id
+    job["last_run_at"] = _iso()
+    job["last_status"] = "running"
+    job["updated_at"] = _iso()
+    jobs[index] = job
+    _save_jobs(jobs)
+    return _format_job(job)
+
+
+def complete_job_run(
+    job_id: str,
+    *,
+    run_id: str,
+    success: bool,
+    exit_code: int | None = None,
+    output_path: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any] | None:
+    jobs = _load_jobs()
+    index = _find_job_index(jobs, str(job_id))
+    if index is None:
+        return None
+    job = jobs[index]
+    status = "success" if success else "failed"
+    job["running"] = False
+    job["current_run_id"] = None
+    job["last_status"] = status
+    job["last_exit_code"] = exit_code
+    job["last_error"] = error
+    job["last_output_path"] = output_path
+    job["last_completed_at"] = _iso()
+    job["next_run_at"] = _next_run(job["schedule"], _now())
+    job["updated_at"] = _iso()
+    history = list(job.get("run_history") or [])
+    history.append({
+        "run_id": run_id,
+        "status": status,
+        "exit_code": exit_code,
+        "output_path": output_path,
+        "error": error,
+        "completed_at": job["last_completed_at"],
+    })
+    job["run_history"] = history[-20:]
+    jobs[index] = job
+    _save_jobs(jobs)
+    return _format_job(job)
 
 
 def remove_job(job_id: str) -> dict[str, Any] | None:

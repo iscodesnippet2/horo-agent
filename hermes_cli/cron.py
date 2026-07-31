@@ -13,6 +13,9 @@ def build_parser(subparsers):
     sub = parser.add_subparsers(dest="cron_command")
 
     sub.add_parser("list", help="List scheduled tasks")
+    sub.add_parser("status", help="Show local scheduler status")
+    tick = sub.add_parser("tick", help="Run due scheduled tasks once")
+    tick.add_argument("--limit", type=int, default=None)
 
     create = sub.add_parser("create", aliases=["add"], help="Create a scheduled task")
     create.add_argument("schedule")
@@ -27,7 +30,11 @@ def build_parser(subparsers):
     edit.add_argument("--name")
     edit.add_argument("--skill", action="append", dest="skills")
 
-    for name in ("pause", "resume", "run", "remove"):
+    run = sub.add_parser("run", help="Run scheduler loop, or trigger a job when job_id is provided")
+    run.add_argument("job_id", nargs="?")
+    run.add_argument("--interval", type=int, default=60)
+
+    for name in ("pause", "resume", "remove"):
         p = sub.add_parser(name, help=f"{name.title()} a scheduled task")
         p.add_argument("job_id")
 
@@ -54,6 +61,26 @@ def cron_command(args: argparse.Namespace) -> None:
                 print(f"  prompt: {job['prompt_preview']}")
         return
 
+    if command == "status":
+        from cron.jobs import due_jobs, list_jobs
+        from cron.scheduler_provider import resolve_cron_scheduler
+
+        provider = resolve_cron_scheduler()
+        jobs = list_jobs(include_disabled=True)
+        due = due_jobs()
+        print(f"provider: {provider.name}")
+        print(f"jobs: {len(jobs)}")
+        print(f"due now: {len(due)}")
+        print("delivery: local only")
+        return
+
+    if command == "tick":
+        from cron.scheduler import tick
+
+        result = tick(limit=getattr(args, "limit", None))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
     if command in {"create", "add"}:
         prompt = " ".join(getattr(args, "prompt", []) or [])
         result = _call(
@@ -78,7 +105,23 @@ def cron_command(args: argparse.Namespace) -> None:
     elif command == "resume":
         result = _call(action="resume", job_id=args.job_id)
     elif command == "run":
-        result = _call(action="run", job_id=args.job_id)
+        job_id = getattr(args, "job_id", None)
+        if job_id:
+            from cron.scheduler import tick
+
+            _call(action="run", job_id=job_id)
+            result = tick(job_id=job_id)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return
+        from cron.scheduler import run_loop
+
+        interval = max(5, int(getattr(args, "interval", 60) or 60))
+        print(f"Local cron scheduler running every {interval}s. Press Ctrl+C to stop.")
+        try:
+            run_loop(interval=interval)
+        except KeyboardInterrupt:
+            print("Stopped local cron scheduler.")
+        return
     elif command == "remove":
         result = _call(action="remove", job_id=args.job_id)
     else:
