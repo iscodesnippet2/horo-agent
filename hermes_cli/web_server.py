@@ -18,6 +18,7 @@ import base64
 import binascii
 import concurrent.futures
 import functools
+import ipaddress
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ import re
 import secrets
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -7663,6 +7665,62 @@ def _detach_main_model_from_provider(cfg: Dict[str, Any], provider_key: str) -> 
     cfg["model"] = model_cfg
 
 
+def _is_public_probe_address(host: str) -> bool:
+    """Return True when every resolved address is public Internet-routable."""
+    try:
+        literal = ipaddress.ip_address(host)
+        addresses = [literal]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise HTTPException(status_code=400, detail=f"Could not resolve endpoint host: {host}") from exc
+        addresses = []
+        for info in infos:
+            raw_addr = info[4][0]
+            try:
+                addresses.append(ipaddress.ip_address(raw_addr))
+            except ValueError:
+                continue
+        if not addresses:
+            raise HTTPException(status_code=400, detail=f"Could not resolve endpoint host: {host}")
+
+    return all(
+        addr.is_global
+        and not addr.is_loopback
+        and not addr.is_private
+        and not addr.is_link_local
+        and not addr.is_multicast
+        and not addr.is_reserved
+        and not addr.is_unspecified
+        for addr in addresses
+    )
+
+
+def _safe_models_probe_url(base_url: str) -> str:
+    """Build a safe public /models probe URL or raise an HTTPException.
+
+    Custom endpoints can still be saved for local/offline use, but the web
+    server must not fetch operator-provided localhost, private-network, or
+    metadata-service URLs during validation.
+    """
+    raw = (base_url or "").strip().rstrip("/")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Enter an endpoint URL first.")
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Endpoint URL must use http(s) and include a host.")
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="Endpoint URL must not include credentials.")
+    host = parsed.hostname.rstrip(".").lower()
+    if not _is_public_probe_address(host):
+        raise HTTPException(
+            status_code=400,
+            detail="Endpoint validation skips localhost, private, link-local, and reserved hosts.",
+        )
+    return urllib.parse.urljoin(raw + "/", "models")
+
+
 def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> Tuple[str, Dict[str, Any]]:
     endpoint_id = _custom_endpoint_id(body.id or body.name)
     name = (body.name or "").strip()
@@ -7846,11 +7904,11 @@ async def validate_custom_endpoint(body: CustomEndpointUpdate):
     """Probe a custom endpoint by calling its OpenAI-compatible /models URL."""
     import httpx
 
-    base_url = (body.base_url or "").strip().rstrip("/")
-    if not base_url:
-        return {"ok": False, "reachable": True, "message": "Enter an endpoint URL first.", "models": []}
+    try:
+        url = _safe_models_probe_url(body.base_url)
+    except HTTPException as exc:
+        return {"ok": False, "reachable": False, "message": str(exc.detail), "models": []}
 
-    url = base_url + "/models"
     headers = {"Accept": "application/json"}
     if body.api_key and body.api_key.strip():
         headers["Authorization"] = f"Bearer {body.api_key.strip()}"
@@ -7891,7 +7949,10 @@ async def validate_provider_credential(body: EnvVarUpdate, request: Request):
     # ids the endpoint advertises (OpenAI ``/v1/models`` shape) so the GUI can
     # auto-pick a default without asking the user to type a model name.
     if key == "OPENAI_BASE_URL":
-        url = value.rstrip("/") + "/models"
+        try:
+            url = _safe_models_probe_url(value)
+        except HTTPException as exc:
+            return {"ok": True, "reachable": False, "message": str(exc.detail), "models": []}
         # Send the optional API key so endpoints that require auth on
         # ``/v1/models`` (many hosted OpenAI-compatible servers) still enumerate
         # their models instead of returning an empty list behind a 401.
@@ -14751,8 +14812,13 @@ def _resolve_profile_dir(name: str) -> Path:
 
 def _profile_setup_command(name: str) -> str:
     """Return the shell command used to configure a profile in the CLI."""
+    return shlex.join(_profile_setup_argv(name))
+
+
+def _profile_setup_argv(name: str) -> List[str]:
+    """Return the argv used to configure a profile in the CLI."""
     _resolve_profile_dir(name)
-    return "horo setup" if name == "default" else f"{name} setup"
+    return ["horo", "setup"] if name == "default" else [name, "setup"]
 
 
 def _write_profile_model(profile_dir: Path, provider: str, model: str) -> None:
@@ -15033,10 +15099,11 @@ async def get_profile_setup_command(name: str):
 @app.post("/api/profiles/{name}/open-terminal")
 async def open_profile_terminal_endpoint(name: str):
     try:
-        command = _profile_setup_command(name)
+        argv = _profile_setup_argv(name)
+        command = shlex.join(argv)
 
         if sys.platform.startswith("win"):
-            subprocess.Popen(["cmd.exe", "/c", "start", "", command])
+            subprocess.Popen(["cmd.exe", "/c", "start", "", *argv])
         elif sys.platform == "darwin":
             escaped = command.replace("\\", "\\\\").replace('"', '\\"')
             applescript = (
@@ -15048,16 +15115,16 @@ async def open_profile_terminal_endpoint(name: str):
             subprocess.Popen(["osascript", "-e", applescript])
         else:
             terminal_commands = [
-                ("x-terminal-emulator", ["x-terminal-emulator", "-e", "sh", "-lc", command]),
-                ("gnome-terminal", ["gnome-terminal", "--", "sh", "-lc", command]),
-                ("konsole", ["konsole", "-e", "sh", "-lc", command]),
-                ("xfce4-terminal", ["xfce4-terminal", "-e", f"sh -lc '{command}'"]),
-                ("mate-terminal", ["mate-terminal", "-e", f"sh -lc '{command}'"]),
-                ("lxterminal", ["lxterminal", "-e", f"sh -lc '{command}'"]),
-                ("tilix", ["tilix", "-e", "sh", "-lc", command]),
-                ("alacritty", ["alacritty", "-e", "sh", "-lc", command]),
-                ("kitty", ["kitty", "sh", "-lc", command]),
-                ("xterm", ["xterm", "-e", "sh", "-lc", command]),
+                ("x-terminal-emulator", ["x-terminal-emulator", "-e", *argv]),
+                ("gnome-terminal", ["gnome-terminal", "--", *argv]),
+                ("konsole", ["konsole", "-e", *argv]),
+                ("xfce4-terminal", ["xfce4-terminal", "-e", *argv]),
+                ("mate-terminal", ["mate-terminal", "-e", *argv]),
+                ("lxterminal", ["lxterminal", "-e", *argv]),
+                ("tilix", ["tilix", "-e", *argv]),
+                ("alacritty", ["alacritty", "-e", *argv]),
+                ("kitty", ["kitty", *argv]),
+                ("xterm", ["xterm", "-e", *argv]),
             ]
             for executable, popen_args in terminal_commands:
                 if subprocess.call(

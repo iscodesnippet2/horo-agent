@@ -1,0 +1,29 @@
+include README.md LICENSE SECURITY.md
+include pyproject.toml setup.py
+
+recursive-include horo_agent *.py
+recursive-include agent *.py
+recursive-include tools *.py
+recursive-include hermes_cli *.py
+recursive-include acp_adapter *.py
+recursive-include plugins *.py
+recursive-include providers *.py
+
+include run_agent.py model_tools.py toolsets.py batch_runner.py trajectory_compressor.py
+include toolset_distributions.py cli.py hermes_bootstrap.py hermes_constants.py
+include hermes_state.py hermes_time.py hermes_logging.py utils.py mcp_serve.py
+
+global-exclude __pycache__/* *.py[cod] .DS_Store
+prune tests
+prune node_modules
+prune web/node_modules
+prune .pytest_cache
+prune .codegraph
+prune .codeboarding
+prune docs/plans
+prune scripts/out
+prune apps/desktop/build
+prune apps/desktop/dist
+exclude package.json package-lock.json eslint.config.shared.mjs
+exclude web/package.json web/package-lock.json
+exclude scripts/whatsapp-bridge/package.json scripts/whatsapp-bridge/package-lock.json

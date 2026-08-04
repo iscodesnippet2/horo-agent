@@ -348,8 +348,8 @@ def mask_secret(
                      Colors.DIM)`` for user-facing display.
 
     Examples:
-        >>> mask_secret("sk-proj-abcdef1234567890")
-        'sk-p...7890'
+        >>> mask_secret("example-token-abcdef1234567890")
+        'exam...7890'
         >>> mask_secret("short")                         # fully masked
         '***'
         >>> mask_secret("")                              # empty default
